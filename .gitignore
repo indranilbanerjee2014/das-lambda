@@ -19,3 +19,5 @@ __pycache__
 .factorypath
 .project
 .settings/*
+.aws-sam
+*.toml
