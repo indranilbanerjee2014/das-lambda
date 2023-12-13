@@ -1,0 +1,161 @@
+1) Use CF_Template.yaml file in the Artifacts folder to create a VPC, an Aurora database, an OpenSearch Cluster, an S3 bucket that will receive Database Activity Stream records as JSON files, an SQS Queue that will receive S3 notifications every time a new object is created in the S3 bucket and an SNS Topic that will be used by OpenSearch Notifications to send email alerts. This Cloudformation Template also create a bastion host
+
+2) Start database activity streams on the database just created.
+
+Take a look at Screenshots/EnablingDatabaseActivityStreamConsole.png and EnablingDatabaseActivityStreamConsoleScreenTwo.png.
+
+If you don't have a KMS key show up, you will need to create a new one - Details on how to start Database Activity Streams can be found at https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/DBActivityStreams.Enabling.html
+
+3) You will need to get the name of the Kinesis Stream that is created when DAS is enabled. You can get this from the AWS console or using the AWS CLI, as described in https://docs.aws.amazon.com/AmazonRDS/latest/(AuroraUserGuide/DBActivityStreams.Status.html
+
+The name of the Kinesis Data Stream for DAS will be something like aws-rds-das-cluster-O2YLDATTX3P62JYYEOP4IT27MI, where "O2YLDATTX3P62JYYEOP4IT27MI" is a unique string that will be different in your case. Please make a note of this unique string for your Kinesis Data Stream as it will be needed in a subsequent step
+
+4) Store the Access Key ID and Secret Access Key of the user who created the database/DAS and store them in the Secrets Manager as separate variables "aws-access-key-id" and "aws-secret-access-key". These are needed by the Lambda function to decrypt the incoming events from the DAS Kinesis Data Stream, as those events are decrypted. Note the ARNs of the two secrets as they will be needed in the next step. Choose "Other Type of Secret" as the Secret Type in Secrets Manager. Ignore the "Configure rotation - optional" screen by clicking the Next button. On the review screen click "Store". Repeat these steps for both the variables
+
+5) From the command line, run git clone https://github.com/indranilbanerjee2014/das-lambda.git into a folder
+
+6) cd to the das-lambda/das_consumer_sam_project sub-folder
+
+7) Make sure you have set the correct AWS profile for the CLI using aws configure. You can run the command aws sts get-caller-identity to ensure you are running the CLI as the correct AWS user in the correct AWS account.
+
+Make sure you have Java, Maven and AWS SAM installed on your machine. You can use an AWS Cloud9 machine for this step
+
+run sam build
+
+8) run sam deploy --guided - Specify the parameters and respond to questions as shown in the screenshot sam_deploy_parameters.png - This will deploy the lambda function that will receive DAS messages, decrypt them, filter out heartbeats and write genuine database activity streams to the S3 bucket created by the Cloudformation template
+
+9) Connect to the bastion host Go to the EC2 console and select the Bastion Host machine and then click on Connect, as shown in ConnectingToBastionHost1.png. Select Session Manager and click Connect as shown in ConnectingToBastionHost2.png
+
+10) Once connected to the Bastion Host, run the command "sudo amazon-linux-extras install postgresql14". This command installs a command line Postgres client psql. We will use this to create database commands on the Postgres database created by the Cloudformation template
+
+11) To connect to the Postgres database from the command-line in the Bastion host, use the command - 
+
+psql "postgresql://<database username>:<database password>@<database host>/postgres"
+
+For example psql "postgresql://admin:Changeme@aurora-das-opensearch-databasesomestring.cluster-anotherstring.us-west-2.rds.amazonaws.com/postgres"
+
+To get the values for the variables used in the above command, go to Secrets Manager and take a look at the secret that has a name starting with "DbActivityStreams". Click on the link to this variable and then click on the "Retrieve Secret Value" button.
+
+12) Now we will need to create a role that will be used by OpenSearch Ingestion Pipeline to read Database Activity Stream new records from the SQS queue and ingest the records into OpenSearch
+
+Create a new role from the IAM console. Select "AWS Service" as the Trusted entity type and "Opensearch ingestion pipelines" from the "Service or use case" drop-down (refer to IAMRoleForOpenSearchIngestionPipelines.png) 
+
+For what policies to provide to this role, please take a look at the Pipeline role section in the document https://docs.aws.amazon.com/opensearch-service/latest/developerguide/pipeline-security-overview.html
+
+For the purpose of testing, we will assign the following policies to this role. However, in production, it is recommended to give this role the least priveleges that it needs for being able to get data from the source and write data to the sink
+
+- AmazonOpenSearchIngestionFullAccess
+- AmazonOpenSearchServiceFullAccess
+- AmazonSQSFullAccess
+- AmazonS3FullAccess
+
+Note down the ARN of this role as it will be needed in the next step
+
+13) Create the OpenSearch Ingestion Pipeline
+
+For this a reference template has been provided under Artifacts/IngestionPipelineConfig.yaml
+
+You need to get the ARN of the role created in the previous step, as well as the URL of the SQS queue and the Domain Endpoint of the OpenSearch cluster
+
+Replace the role ARN in the sts_role_arn fields in lines 43 and 59.
+
+Replace the queue_url in line 30
+
+Replace the hosts in line 56
+
+Save the file after making the changes
+
+14) Go to the OpenSearch console and click on Pipelines under Ingestion in the left menu (refer to OpenSearchIngestionPipeline1.png)
+
+Click on the "Create Pipeline" button (refer to OpenSearchIngestionPipeline2.png)
+
+On the next screen, give the Pipeline a name and copy-paste the contents of the modified IngestionPipelineConfig.yaml from the step 13 above into the "Pipeline Configuration" space or use the "Upload file" feature to upload the YAML file (refer to OpenSearchIngestionPipeline3.png)
+
+Validate the pipeline configuration is correct
+
+Next specify the VPC (should be the same VPC as OpenSearch), subnets (choose private subnets) and security group (choose the security group of Bastion Host or create a new security group that has HTTPS access to the OpenSearch Security group) - refer to OpenSearchIngestionPipeline4.png
+
+In the Log Publishing options, leave the defaults on and then click on the "Next" button
+
+On the "Review and Create" screen, click on "Create Pipeline" button to create the pipeline
+
+You should see a message "Pipeline <your pipeline name> is being created". It takes a few minutes for the pipeline to be created. Go out have a coffee and when you are back, the pipeline should have been created.
+
+In case you see an error message that the role could not be assumed, try once again without changing anything.
+
+
+15) Open the OpenSearch Dashboard on a browser.
+
+You can either look at the following link - https://repost.aws/questions/QUMsQz3kFkSUKIIXVRmxSh2A/access-to-aws-opensearch-in-a-vpc for options on how to access the OpenSearch dashboard for an OpenSearch cluster inside a VPC
+
+Another option for testing purposes is to create a Windows EC2 machine in the same VPC as the OpenSearch cluster but in a Public subnet and with a security group that has an inbound rule to allow RDP from your machine's IP address
+
+You can then go to the EC2 console of this Windows machine and download the RDP file after creating a key-pair from the EC2 console and downloading it to your machine as you will need this to decrypt the Administrator password for the Windows machine. Then RDP to the Windows machine and access the OpenSearch Dashboard on a browser of your choice to the OpenSearch Dashboard URL that can be found in the OpenSearch console.
+
+16) Once you are inside the OpenSearch dashboard, you need to first set-up an Index Pattern so you can see your index in the Discover page on the OpenSearch dashboard.
+
+Click on Management --> Stack Management (see CreateIndexPatternInOpenSearchDashboard_1.png)
+
+On the next screen, click on Index Patterns and then click on the "Create Index Patterns" button on the right of the screen (see CreateIndexPatternInOpenSearchDashboard_2.png)
+
+In the Index Pattern Name, type the name of your index (das-records or whatever name you gave in the Pipeline configuration file) followed by a *. Then click on the "Next Step" button to the right (see CreateIndexPatternInOpenSearchDashboard_3.png)
+
+On the next screen, click on the "Create Index Pattern" button
+
+Next go to the main menu and click on "Discover" under "OpenSearch Dashboards" (see CreateIndexPatternInOpenSearchDashboard_4.png)
+
+Pick your index pattern from the dropdown (see CreateIndexPatternInOpenSearchDashboard_5.png)
+
+17) Now repeat Step 11 to log into the Aurora Postgres database from the Bastion Host and once logged in, type any sql statement such as - 
+
+create table humans (firstname varchar(25) not null, lastname varchar(25) not null, role varchar(50) not null);
+
+insert into humans values ('John', 'Doe', 'Solutions Architect');
+
+select * from humans;
+
+You should now see some records in the OpenSearch Discover tab
+
+18) Next we will create a sample alert. Let's assume that the Aurora database we created is a Production Database and any time a DDL query is executed, we want to be alerted.
+
+19) First we will create a Channel that will send out an SNS message when the alert gets triggered. Make sure to subscribe your email address to the SNS topic that was created by the Cloudformation template. Once you have subscribed your email to the SNS Topic, you will get an email. Please confirm the email by clicking on the "Confirm Subscription" link on the email. The email will come from "AWS Notifications <no-reply@sns.amazonaws.com>"
+
+To configure Notifications on the OpenSearch Dashboard, first click on "Notifications" under "OpenSearch Plugins" on the main menu (see ConfiguringNotificationsChannelOnOSDashboard_1.png)
+
+Click on the "Create Channel" button (see ConfiguringNotificationsChannelOnOSDashboard_2.png)
+
+Give a name to the channel and select "Amazon SNS" from the dropdown for Channel Type. Specify the ARN of the SNS Topic created by the Cloudformation template and also the role for OpenSearch to be able to send SNS messages. The name of the role will be <cloudformation stack name>-OpenSearchSNSPulishRole. Copy the ARN of the role and paste it on the IAM Role ARN field (see ConfiguringNotificationsChannelOnOSDashboard_3.png).
+
+Click on the "Send test message" button to ensure Opensearch is able to send a test message to SNS.
+
+Once this is confirmed, click on the "Create" button to create the channel
+
+20) Next go to the "Alerting" menu under "OpenSearch Plugins" on the main menu in the OpenSearch Dashboard
+
+Click on the Create Monitor button (see CreatingAlertsOnOpenSearchDashboard_1.png)
+
+Give the monitor a name. Select "Per Document Monitor" on the "Monitor Type" (see CreatingAlertsOnOpenSearchDashboard_2.png)
+
+Keep the default frequency of 1 minute
+
+Select your index under the "Data Source"
+
+Give a name to the Query and under Field, select "Class" from the dropdown of fields, select "is" from the next dropdown and type DDL in the last box (see CreatingAlertsOnOpenSearchDashboard_3.png)
+
+Scroll down and click on "Add a Trigger" (see CreatingAlertsOnOpenSearchDashboard_4.png)
+
+Give the trigger a name and select the query created above from the dropdown (see CreatingAlertsOnOpenSearchDashboard_5.png)
+
+Under Actions, specify a name and choose the Channel created above (see CreatingAlertsOnOpenSearchDashboard_6.png)
+
+Leave the "Perform Action" as "Per Execution".
+
+Click on the "Create" button at the bottom.
+
+The Alert should now be created (see CreatingAlertsOnOpenSearchDashboard_7.png)
+
+21) Once the alert has been created run a DDL query such as:
+
+create table employees (firstname varchar(25) not null, lastname varchar(25) not null, role varchar(50) not null);
+
+22) The Alert should turn red on the OpenSearch dashboard and an email should also be generated (see AlertsOnOpenSearchDashboard.png)
