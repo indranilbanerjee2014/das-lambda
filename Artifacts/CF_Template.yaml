@@ -664,6 +664,7 @@ Outputs:
       Manager
     Value:
       Ref: BastionHost30F9ED05
+
 Parameters:
   SsmParameterValueawsserviceamiamazonlinuxlatestamzn2amikernel510hvmx8664gp2C96584B6F00A464EAD1953AFF4B05118Parameter:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -671,12 +672,16 @@ Parameters:
   SourceBucketName:
     Type: String
     Description: A name for the S3 bucket to be created for Database Activity Logs
+    Default: das-bucket
   SourceBucketPrefix:
     Type: String
     Description: A prefix where the Database Activity Logs will be sent to in the S3 bucket
+    Default: das
   SQSQueueName:
     Type: String
     Description: An SQS queue where the Database Activity Logs will be sent to through S3 Notifications. The OpenSearch Ingestion pipeline will pick up messages from this queue and insert records into OpenSearch
+    Default: das-notifications-queue
   SNSTopicName:
     Type: String
     Description: An SNS topic that will be used to send out notifications from OpenSearch dashboard alerts
+    Default: opensearch-notifications-topic
